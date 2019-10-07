@@ -3,11 +3,11 @@ name = "growable-bloom-filter"
 version = "0.1.0"
 authors = ["David Briggs <david@dpbriggs.ca>"]
 edition = "2018"
-license = "mit"
+license = "MIT"
 description = "Scalable Bloom Filters with serde support"
 homepage = "https://github.com/dpbriggs/growable-bloom-filters"
 repository = "https://github.com/dpbriggs/growable-bloom-filters"
-keywords = ["bloom", "bloom filter", "scalable bloom filter", "serde"]
+keywords = ["bloom", "bloom_filter", "scalable_bloom_filter", "serde"]
 categories = ["data-structures"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

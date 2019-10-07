@@ -1,7 +1,8 @@
 #![deny(unsafe_code)]
-#![feature(generators, generator_trait)]
+#![feature(generators, generator_trait, test)]
 // Impl of Scalable Bloom Filters
 // http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
+extern crate test;
 use bitvec::prelude::BitVec;
 use seahash::SeaHasher;
 use serde_derive::{Deserialize, Serialize};
@@ -54,7 +55,7 @@ impl Bloom {
     /// * `slice_len` - The actual _bit_ length of each slide.
     /// * `seed` - A pseudo random seed; used in hashing each slice.
     fn new(num_slices: usize, slice_len: usize, seed: u64) -> Bloom {
-        debug_assert!(slice_len > 1);
+        debug_assert!(slice_len >= 1);
         debug_assert!(num_slices > 0);
         let bitvec_size = num_slices * slice_len;
         let mut field = BitVec::with_capacity(bitvec_size);
@@ -493,6 +494,43 @@ mod growable_bloom_tests {
             b.insert("hello");
             b.insert(&-1);
             b.insert(&0);
+        }
+    }
+
+    mod bench {
+        use crate::GrowableBloom;
+        use test::Bencher;
+
+        #[bench]
+        fn bench_insert_normal_prob(b: &mut Bencher) {
+            let mut gbloom = GrowableBloom::new(0.05, 1000);
+            b.iter(|| gbloom.insert(10));
+        }
+        #[bench]
+        fn bench_insert_small_prob(b: &mut Bencher) {
+            let mut gbloom = GrowableBloom::new(0.0005, 1000);
+            b.iter(|| gbloom.insert(10));
+        }
+        #[bench]
+        fn bench_many(b: &mut Bencher) {
+            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            b.iter(|| gbloom.insert(10));
+        }
+        #[bench]
+        fn bench_insert_large(b: &mut Bencher) {
+            let s: String = (0..10000).map(|_| 'X').collect();
+            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            b.iter(|| gbloom.insert(&s))
+        }
+        #[bench]
+        fn bench_grow(b: &mut Bencher) {
+            let mut gbloom = GrowableBloom::new(0.90, 1);
+            b.iter(|| {
+                for i in 0..100 {
+                    gbloom.insert(&i);
+                    assert!(gbloom.contains(&i));
+                }
+            })
         }
     }
 }

@@ -3,6 +3,8 @@
 
 * Growable Bloom Filters
 
+[[https://crates.io/crates/growable-bloom-filter][CRATES.IO]] | [[https://docs.rs/growable-bloom-filter/latest/growable_bloom_filter/struct.GrowableBloom.html][DOCUMENTATION]]
+
 ** Overview
 
 Implementation of [[http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf][Scalable Bloom Filters]] which also provides serde serialization and deserialize.

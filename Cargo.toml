@@ -9,6 +9,7 @@ homepage = "https://github.com/dpbriggs/growable-bloom-filters"
 repository = "https://github.com/dpbriggs/growable-bloom-filters"
 keywords = ["bloom", "filter", "scalable", "serde"]
 categories = ["data-structures"]
+documentation = "https://docs.rs/growable-bloom-filter/latest/growable_bloom_filter/struct.GrowableBloom.html"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

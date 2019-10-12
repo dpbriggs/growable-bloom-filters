@@ -1,5 +1,5 @@
 #![deny(unsafe_code)]
-#![feature(generators, generator_trait, test)]
+#![feature(test)]
 // Impl of Scalable Bloom Filters
 // http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
 extern crate test;
@@ -7,10 +7,6 @@ use bitvec::prelude::BitVec;
 use seahash::SeaHasher;
 use serde_derive::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use std::{
-    ops::{Generator, GeneratorState},
-    pin::Pin,
-};
 
 /// Base Bloom Filter
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
@@ -24,26 +20,6 @@ struct Bloom {
     slice_len: usize,
     /// The seed used in the hash function.
     seed: u64,
-}
-
-/// Iterate over the index generator
-///
-/// Usage looks like:
-/// ```rust
-/// iter_indices!(self, item, index, {
-///   self.field.set(index, true);
-/// });
-/// ```
-macro_rules! iter_indices {
-    ($self:expr, $item:expr, $yielded_item:ident, $e:expr) => {
-        let mut g = Bloom::index_generator($item, $self.seed, $self.num_slices, $self.slice_len);
-        loop {
-            match Pin::new(&mut g).resume() {
-                GeneratorState::Yielded($yielded_item) => $e,
-                _ => break,
-            }
-        }
-    };
 }
 
 impl Bloom {
@@ -71,33 +47,24 @@ impl Bloom {
         }
     }
 
-    /// Create an index generator for a given item: Hash.
+    /// Create an index iterator for a given item.
     ///
-    /// You shouldn't call this directly, use [iter_indices](crate::iter_indices)
+    /// This creates a stream of indices corresponding to a single index
+    /// per slice.
     ///
     /// # Arguments
     ///
     /// * `item` - The item to hash.
-    /// * `seed` - A pseudo random seed; used in hashing each slice.
-    /// * `num_slices` - Number of slices in the bloom.
-    /// * `slice_len` - _Bit_ length of each slice.
-    fn index_generator<'a, T: Hash>(
-        item: &'a T,
-        seed: u64,
-        num_slices: usize,
-        slice_len: usize,
-    ) -> impl Generator<Yield = usize, Return = ()> + 'a {
-        move || {
-            let (k1, k2, k3, k4) = generate_seed(seed);
-            let mut hasher = SeaHasher::with_seeds(k1, k2, k3, k4);
-            for curr_slice in 0..num_slices {
-                item.hash(&mut hasher);
-                let hash = hasher.finish();
-                hasher.write_u64(hash);
-                let appropriate_index = (hash as usize % slice_len) + curr_slice * slice_len;
-                yield appropriate_index;
-            }
-        }
+    fn index_iterator<'a, T: Hash>(&self, item: &'a T) -> impl Iterator<Item = usize> + 'a {
+        let slice_len = self.slice_len;
+        let (k1, k2, k3, k4) = generate_seed(self.seed);
+        let mut hasher = SeaHasher::with_seeds(k1, k2, k3, k4);
+        (0..self.num_slices).map(move |curr_slice| {
+            item.hash(&mut hasher);
+            let hash = hasher.finish();
+            hasher.write_u64(hash);
+            (hash as usize % slice_len) + curr_slice * slice_len
+        })
     }
 
     /// Insert an `item` into the Bloom.
@@ -119,9 +86,9 @@ impl Bloom {
     /// bloom.insert(&item);
     ///
     fn insert<T: Hash>(&mut self, item: &T) {
-        iter_indices!(self, item, index, {
-            self.field.set(index, true);
-        });
+        for index in self.index_iterator(item) {
+            self.field.set(index, true)
+        }
     }
 
     /// Test if `item` is in the Bloom.
@@ -140,12 +107,8 @@ impl Bloom {
     /// assert!(bloom.contains(&item));
     ///
     fn contains<T: Hash>(&self, item: &T) -> bool {
-        iter_indices!(self, item, index, {
-            if !self.field.get(index).unwrap() {
-                return false;
-            }
-        });
-        true
+        self.index_iterator(item)
+            .all(|index| self.field.get(index).unwrap())
     }
 
     /// Test the fill ratio of the Bloom
@@ -342,7 +305,7 @@ impl GrowableBloom {
         let curr_bloom = self.blooms.last_mut().unwrap();
         curr_bloom.insert(&item);
         // Step 3: Grow if necessary
-        if curr_bloom.fill_ratio_gte(0.5) {
+        if curr_bloom.fill_ratio_gte(0.8) {
             self.grow();
         }
     }
@@ -520,6 +483,12 @@ mod growable_bloom_tests {
         fn bench_insert_large(b: &mut Bencher) {
             let s: String = (0..10000).map(|_| 'X').collect();
             let mut gbloom = GrowableBloom::new(0.05, 100000);
+            b.iter(|| gbloom.insert(&s))
+        }
+        #[bench]
+        fn bench_insert_large_very_small_prob(b: &mut Bencher) {
+            let s: String = (0..10000).map(|_| 'X').collect();
+            let mut gbloom = GrowableBloom::new(0.000005, 100000);
             b.iter(|| gbloom.insert(&s))
         }
         #[bench]

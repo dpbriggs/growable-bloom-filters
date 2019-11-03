@@ -6,7 +6,10 @@ extern crate test;
 use bitvec::prelude::BitVec;
 use seahash::SeaHasher;
 use serde_derive::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    iter::Iterator,
+};
 
 /// Base Bloom Filter
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]

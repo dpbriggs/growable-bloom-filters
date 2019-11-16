@@ -1,4 +1,4 @@
-name: Rust
+name: Growable Bloom Filters
 
 on: [push]
 
@@ -8,6 +8,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Install nightly
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: nightly
+        override: true
     - uses: actions/checkout@v1
     - name: Build
       run: cargo build --verbose

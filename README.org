@@ -1,6 +1,10 @@
 #+AUTHOR: David Briggs
 #+STARTUP: SHOWALL
 
+
+[[https://github.com/dpbriggs/growable-bloom-filters][https://github.com/dpbriggs/growable-bloom-filters/workflows/Growable%20Bloom%20Filters/badge.svg]]
+
+
 * Growable Bloom Filters
 
 [[https://crates.io/crates/growable-bloom-filter][CRATES.IO]] | [[https://docs.rs/growable-bloom-filter/latest/growable_bloom_filter/struct.GrowableBloom.html][DOCUMENTATION]]

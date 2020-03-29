@@ -111,7 +111,7 @@ impl Bloom {
     ///
     fn contains<T: Hash>(&self, item: &T) -> bool {
         self.index_iterator(item)
-            .all(|index| self.field.get(index).unwrap())
+            .all(|index| *self.field.get(index).unwrap())
     }
 
     /// Test the fill ratio of the Bloom

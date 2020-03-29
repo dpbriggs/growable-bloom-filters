@@ -1,6 +1,6 @@
 [package]
 name = "growable-bloom-filter"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["David Briggs <david@dpbriggs.ca>"]
 edition = "2018"
 license = "MIT"
@@ -15,7 +15,7 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bitvec = {version="0.15.2", features=["serde"]}
+bitvec = {version="0.17.4", features=["serde"]}
 serde = { version = "1.0.101", features = ["alloc"] } # damn it feels good be a gangster
 seahash = "3.0.6"
 serde_derive = "1.0.101"

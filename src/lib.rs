@@ -133,6 +133,11 @@ impl Bloom {
         let len = (self.slice_len * self.num_slices) as f64;
         (self.field.count_ones() as f64 / len) >= lower_bound
     }
+
+    /// Clear the bloom filter.
+    fn clear(&mut self) {
+        self.field.iter_mut().for_each(|mut b| *b = false);
+    }
 }
 
 /// Convenience function to hash a u64
@@ -213,6 +218,7 @@ pub struct GrowableBloom {
 
 impl GrowableBloom {
     const GROWTH_FACTOR: usize = 2;
+    const MAXIMUM_FILL_RATIO: f64 = 0.8;
 
     /// Create a new GrowableBloom filter.
     ///
@@ -308,9 +314,57 @@ impl GrowableBloom {
         let curr_bloom = self.blooms.last_mut().unwrap();
         curr_bloom.insert(&item);
         // Step 3: Grow if necessary
-        if curr_bloom.fill_ratio_gte(0.8) {
+        if curr_bloom.fill_ratio_gte(GrowableBloom::MAXIMUM_FILL_RATIO) {
             self.grow();
         }
+    }
+
+    /// Clear the bloom filter.
+    ///
+    /// This does not resize the filter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloom;
+    /// let mut bloom = GrowableBloom::new(0.05, 10);
+    /// let item = 0;
+    ///
+    /// bloom.insert(&item);
+    /// assert!(bloom.contains(&item));
+    /// bloom.clear();
+    /// assert!(!bloom.contains(&item)); // No longer contains item
+    /// ```
+    pub fn clear(&mut self) {
+        for bloom in self.blooms.iter_mut() {
+            bloom.clear()
+        }
+    }
+
+    /// Record if `item` already exists in the filter, and insert it if it doesn't already exist.
+    ///
+    /// Returns `true` if the item already existed in the filter.
+    ///
+    /// Note: This isn't faster than just inserting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloom;
+    /// let mut bloom = GrowableBloom::new(0.05, 10);
+    /// let item = 0;
+    ///
+    /// let existed_before = bloom.check_and_set(&item);
+    /// assert!(existed_before == false);
+    /// let existed_before = bloom.check_and_set(&item);
+    /// assert!(existed_before == true);
+    /// ```
+    pub fn check_and_set<T: Hash>(&mut self, item: T) -> bool {
+        let prev = self.contains(&item);
+        if !prev {
+            self.insert(item);
+        }
+        prev
     }
 
     /// Grow the GrowableBloom
@@ -327,6 +381,7 @@ impl GrowableBloom {
 mod growable_bloom_tests {
     mod test_bloom {
         use crate::Bloom;
+
         #[test]
         fn can_insert_bloom() {
             let mut b = Bloom::new(2, 1024, 10);
@@ -342,6 +397,17 @@ mod growable_bloom_tests {
             b.insert(&item);
             assert!(b.contains(&item))
         }
+
+        #[test]
+        fn can_clear_bloom() {
+            let mut b = Bloom::new(2, 1024, 10);
+            let item: String = "hello world".to_owned();
+            b.insert(&item);
+            assert!(b.contains(&item));
+            b.clear();
+            assert!(!b.contains(&item));
+        }
+
         #[test]
         fn test_slice_bloom() {
             let mut b = Bloom::new(3, 5, 10);
@@ -395,11 +461,20 @@ mod growable_bloom_tests {
             assert_eq!(b.field[0..slice_len].len(), b.field[slice_len..].len());
             assert_ne!(b.field[0..slice_len], b.field[slice_len..]);
         }
+
+        #[test]
+        fn test_refs() {
+            let item = String::from("Hello World");
+            let mut b = Bloom::new(2, 1024, 10);
+            b.insert(&item);
+            assert!(b.contains(&item));
+        }
     }
 
     mod test_growable {
         use crate::GrowableBloom;
         use serde_json;
+
         #[test]
         fn can_insert() {
             let mut b = GrowableBloom::new(0.05, 1000);
@@ -427,6 +502,7 @@ mod growable_bloom_tests {
             b.insert(&2);
             assert_eq!(b.contains(&"hello"), false);
         }
+
         #[test]
         fn can_insert_a_lot_of_elements() {
             let mut b = GrowableBloom::new(0.05, 1000);
@@ -435,6 +511,7 @@ mod growable_bloom_tests {
                 assert!(b.contains(&i));
             }
         }
+
         #[test]
         fn can_serialize_deserialize() {
             let mut b = GrowableBloom::new(0.05, 1000);
@@ -445,6 +522,7 @@ mod growable_bloom_tests {
             assert_ne!(b_s.contains(&1), true);
             assert_ne!(b_s.contains(&1000), true);
         }
+
         #[test]
         fn verify_saturation() {
             let mut b = GrowableBloom::new(0.50, 100);
@@ -453,6 +531,7 @@ mod growable_bloom_tests {
             }
             assert_eq!(b.contains(&10001), false)
         }
+
         #[test]
         fn test_types_saturation() {
             let mut b = GrowableBloom::new(0.50, 100);
@@ -460,6 +539,14 @@ mod growable_bloom_tests {
             b.insert("hello");
             b.insert(&-1);
             b.insert(&0);
+        }
+
+        #[test]
+        fn can_check_and_set() {
+            let mut b = GrowableBloom::new(0.05, 1000);
+            let item = 20;
+            assert!(!b.check_and_set(&item));
+            assert!(b.check_and_set(&item));
         }
     }
 

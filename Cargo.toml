@@ -1,6 +1,6 @@
 [package]
 name = "growable-bloom-filter"
-version = "0.2.3"
+version = "1.0.1"
 authors = ["David Briggs <david@dpbriggs.ca>"]
 edition = "2018"
 license = "MIT"

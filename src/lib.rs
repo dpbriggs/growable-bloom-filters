@@ -1,7 +1,9 @@
 #![deny(unsafe_code)]
-#![feature(test)]
+#![cfg_attr(feature = "nightly", feature(test))]
+#![cfg_attr(nightly, feature(test))]
 // Impl of Scalable Bloom Filters
 // http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
+#[cfg(feature = "nightly")]
 extern crate test;
 use bitvec::prelude::BitVec;
 use seahash::SeaHasher;
@@ -550,6 +552,7 @@ mod growable_bloom_tests {
         }
     }
 
+    #[cfg(feature = "nightly")]
     mod bench {
         use crate::GrowableBloom;
         use test::Bencher;

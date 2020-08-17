@@ -1,6 +1,5 @@
 #![deny(unsafe_code)]
 #![cfg_attr(feature = "nightly", feature(test))]
-#![cfg_attr(nightly, feature(test))]
 // Impl of Scalable Bloom Filters
 // http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
 #[cfg(feature = "nightly")]

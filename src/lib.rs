@@ -22,8 +22,12 @@ struct Bloom {
     num_slices: usize,
     /// The _bit_ length of each slice.
     slice_len: usize,
-    /// The seed used in the hash function.
-    seed: u64,
+    /// These values seed the hash function, and are derived
+    /// from `seed`
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
 }
 
 impl Bloom {
@@ -43,11 +47,15 @@ impl Bloom {
             field.push(false);
         }
         field.shrink_to_fit();
+        let (k1, k2, k3, k4) = generate_seed(seed);
         Bloom {
             field,
             num_slices,
             slice_len,
-            seed,
+            k1,
+            k2,
+            k3,
+            k4,
         }
     }
 
@@ -61,8 +69,7 @@ impl Bloom {
     /// * `item` - The item to hash.
     fn index_iterator<'a, T: Hash>(&self, item: &'a T) -> impl Iterator<Item = usize> + 'a {
         let slice_len = self.slice_len;
-        let (k1, k2, k3, k4) = generate_seed(self.seed);
-        let mut hasher = SeaHasher::with_seeds(k1, k2, k3, k4);
+        let mut hasher = SeaHasher::with_seeds(self.k1, self.k2, self.k3, self.k4);
         (0..self.num_slices).map(move |curr_slice| {
             item.hash(&mut hasher);
             let hash = hasher.finish();
@@ -187,6 +194,7 @@ fn generate_seed(base_seed: u64) -> (u64, u64, u64, u64) {
 /// You can control the failure rate by setting `desired_error_prob` and `est_insertions` appropriately.
 ///
 /// # Applications
+///
 /// Bloom filters are typically used as a pre-cache to avoid expensive operations.
 /// For example, if you need to ask ten thousand servers if they have data XYZ,
 /// you could use GrowableBloom to figure out which ones do NOT have XYZ.

@@ -6,7 +6,6 @@
 #[cfg(feature = "nightly")]
 extern crate test;
 
-use seahash::SeaHasher;
 use serde_derive::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
@@ -125,20 +124,16 @@ impl Bloom {
 
 /// Returns 2 hashes for the given item
 fn double_hashing_hashes<T: Hash>(item: T) -> (usize, usize) {
-    let mut hs = SeaHasher::with_seeds(
-        0xe7b0c93ca8525013,
-        0x011d02b854ae8182,
-        0x7bcc5cf9c39cec76,
-        0xfa336285d102d083,
+    let mut hs = ahash::AHasher::new_with_keys(
+        0xe7b0c93ca8525013011d02b854ae8182,
+        0x7bcc5cf9c39cec76fa336285d102d083,
     );
     item.hash(&mut hs);
     let h1 = hs.finish();
 
-    hs = SeaHasher::with_seeds(
-        0x16f11fe89b0d677c,
-        0xb480a793d8e6c86c,
-        0x6fe2e5aaf078ebc9,
-        0x14f994a4c5259381,
+    hs = ahash::AHasher::new_with_keys(
+        0x16f11fe89b0d677cb480a793d8e6c86c,
+        0x6fe2e5aaf078ebc914f994a4c5259381,
     );
     item.hash(&mut hs);
 
@@ -508,6 +503,12 @@ mod growable_bloom_tests {
         fn bench_many(b: &mut Bencher) {
             let mut gbloom = GrowableBloom::new(0.05, 100000);
             b.iter(|| gbloom.insert(10));
+        }
+        #[bench]
+        fn bench_insert_string(b: &mut Bencher) {
+            let s: String = (0..100).map(|_| 'X').collect();
+            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            b.iter(|| gbloom.insert(&s))
         }
         #[bench]
         fn bench_insert_large(b: &mut Bencher) {

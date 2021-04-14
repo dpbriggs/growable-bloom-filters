@@ -1,10 +1,11 @@
 #![deny(unsafe_code)]
 #![cfg_attr(feature = "nightly", feature(test))]
-// Impl of Scalable Bloom Filters
-// http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
+///! Impl of Scalable Bloom Filters
+///! http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.62.7953&rep=rep1&type=pdf
+
 #[cfg(feature = "nightly")]
 extern crate test;
-use bitvec::prelude::BitVec;
+
 use seahash::SeaHasher;
 use serde_derive::{Deserialize, Serialize};
 use std::{
@@ -16,18 +17,14 @@ use std::{
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 struct Bloom {
     /// The actual bit field. Set to 0 with `Bloom::new`.
-    field: BitVec,
+    #[serde(with = "serde_bytes")]
+    buffer: Vec<u8>,
     /// The number of slices in the bloom filter.
+    /// Equivalent to the hash function in the classic bloom filter.
     /// A single insertion will result in a single bit being set in each slice.
     num_slices: usize,
     /// The _bit_ length of each slice.
     slice_len: usize,
-    /// These values seed the hash function, and are derived
-    /// from `seed`
-    k1: u64,
-    k2: u64,
-    k3: u64,
-    k4: u64,
 }
 
 impl Bloom {
@@ -35,50 +32,53 @@ impl Bloom {
     ///
     /// # Arguments
     ///
-    /// * `num_slices` - The number of slices used in the bloom filter.
-    /// * `slice_len` - The actual _bit_ length of each slide.
-    /// * `seed` - A pseudo random seed; used in hashing each slice.
-    fn new(num_slices: usize, slice_len: usize, seed: u64) -> Bloom {
-        debug_assert!(slice_len >= 1);
-        debug_assert!(num_slices > 0);
-        let bitvec_size = num_slices * slice_len;
-        let mut field = BitVec::with_capacity(bitvec_size);
-        for _ in 0..bitvec_size {
-            field.push(false);
-        }
-        field.shrink_to_fit();
-        let (k1, k2, k3, k4) = generate_seed(seed);
+    /// * `capacity` - target capacity.
+    /// * `error_ratio` - false positive ratio [0..1.0].
+    /// * `seed` - a seed to be used to initialize the hasher.
+    fn new(capacity: usize, error_ratio: f64) -> Bloom {
+        debug_assert!(capacity >= 1);
+        debug_assert!(0.0 < error_ratio && error_ratio < 1.0);
+        // directly from paper: k ~ log_2(1/desired_error_prob)
+        let num_slices = ((1.0 / error_ratio).log2()).ceil() as usize;
+        // re-arrange est_insertions ~ M(ln(2)^2 / ln(desired_error_prob))
+        let opt_total_bits =
+            (error_ratio.ln().abs() * capacity as f64 / 2f64.ln().powi(2)).ceil() as usize;
+        // round up to the next byte
+        let buffer_bytes = (opt_total_bits + 7) / 8;
+
+        let mut buffer = Vec::with_capacity(buffer_bytes);
+        buffer.resize(buffer_bytes, 0);
+        let slice_len = buffer_bytes * 8 / num_slices;
         Bloom {
-            field,
+            buffer,
             num_slices,
             slice_len,
-            k1,
-            k2,
-            k3,
-            k4,
         }
     }
 
     /// Create an index iterator for a given item.
     ///
-    /// This creates a stream of indices corresponding to a single index
-    /// per slice.
+    /// This creates an iterator of `(byte idx, byte mask)` indices in the buffer.
+    /// One per slice.
     ///
     /// # Arguments
     ///
     /// * `item` - The item to hash.
-    fn index_iterator<'a, T: Hash>(&self, item: &'a T) -> impl Iterator<Item = usize> + 'a {
+    fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
+        // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
         let slice_len = self.slice_len;
-        let mut hasher = SeaHasher::with_seeds(self.k1, self.k2, self.k3, self.k4);
-        (0..self.num_slices).map(move |curr_slice| {
-            item.hash(&mut hasher);
-            let hash = hasher.finish();
-            hasher.write_u64(hash);
-            (hash as usize % slice_len) + curr_slice * slice_len
+        let (mut h1, mut h2) = double_hashing_hashes(item);
+        (0..self.num_slices).map(move |i| {
+            let hi = h1 % slice_len + i * slice_len;
+            h1 = h1.wrapping_add(h2);
+            h2 = h2.wrapping_add(i);
+            (hi / 8, 1 << (hi % 8))
         })
     }
 
-    /// Insert an `item` into the Bloom.
+    /// Insert an *NEW* `item` into the Bloom.
+    /// The caller is expected to check that the item is not contained
+    /// in the filter before calling new.
     ///
     /// # Arguments
     ///
@@ -97,8 +97,8 @@ impl Bloom {
     /// bloom.insert(&item);
     ///
     fn insert<T: Hash>(&mut self, item: &T) {
-        for index in self.index_iterator(item) {
-            self.field.set(index, true)
+        for (byte, mask) in self.index_iterator(item) {
+            self.buffer[byte] |= mask;
         }
     }
 
@@ -119,64 +119,33 @@ impl Bloom {
     ///
     fn contains<T: Hash>(&self, item: &T) -> bool {
         self.index_iterator(item)
-            .all(|index| *self.field.get(index).unwrap())
-    }
-
-    /// Test the fill ratio of the Bloom
-    ///
-    /// # Arguments
-    ///
-    /// * `lower_bound` - The minimum fill ratio
-    ///
-    /// # Example
-    ///
-    ///
-    /// let bloom = Bloom::new(0.05, 10);
-    /// let item = 0;
-    ///
-    /// bloom.insert(&item);
-    /// assert!(!bloom.fill_ratio_gte(0.01));
-    ///
-    fn fill_ratio_gte(&self, lower_bound: f64) -> bool {
-        let len = (self.slice_len * self.num_slices) as f64;
-        (self.field.count_ones() as f64 / len) >= lower_bound
-    }
-
-    /// Clear the bloom filter.
-    fn clear(&mut self) {
-        self.field.iter_mut().for_each(|mut b| *b = false);
+            .all(|(byte, mask)| self.buffer[byte] & mask != 0)
     }
 }
 
-/// Convenience function to hash a u64
-///
-/// # Arguments
-///
-/// * `i` - The u64 to hash
-fn hash_u64(i: u64) -> u64 {
-    seahash::hash(&i.to_be_bytes())
-}
+/// Returns 2 hashes for the given item
+fn double_hashing_hashes<T: Hash>(item: T) -> (usize, usize) {
+    let mut hs = SeaHasher::with_seeds(
+        0xe7b0c93ca8525013,
+        0x011d02b854ae8182,
+        0x7bcc5cf9c39cec76,
+        0xfa336285d102d083,
+    );
+    item.hash(&mut hs);
+    let h1 = hs.finish();
 
-/// Stretch a u64 into four u64s
-///
-/// # Arguments
-///
-/// * `base_seed` - The seed to stretch
-#[inline]
-fn generate_seed(base_seed: u64) -> (u64, u64, u64, u64) {
-    let h1 = hash_u64(base_seed);
-    let h2 = hash_u64(h1);
-    let h3 = hash_u64(h2);
-    let mut hasher = SeaHasher::with_seeds(base_seed, h1, h2, h3);
-    hasher.write_u64(0);
-    let a = hasher.finish();
-    hasher.write_u64(a);
-    let b = hasher.finish();
-    hasher.write_u64(b);
-    let c = hasher.finish();
-    hasher.write_u64(c);
-    let d = hasher.finish();
-    (a, b, c, d)
+    hs = SeaHasher::with_seeds(
+        0x16f11fe89b0d677c,
+        0xb480a793d8e6c86c,
+        0x6fe2e5aaf078ebc9,
+        0x14f994a4c5259381,
+    );
+    item.hash(&mut hs);
+
+    // h2 hash shouldn't be 0 for double hashing
+    let h2 = hs.finish().max(1);
+
+    (h1 as _, h2 as _)
 }
 
 /// A Growable Bloom Filter
@@ -217,17 +186,17 @@ fn generate_seed(base_seed: u64) -> (u64, u64, u64, u64) {
 pub struct GrowableBloom {
     /// The constituent bloom filters
     blooms: Vec<Bloom>,
-    /// The current number of slices in the bloom filter
-    curr_num_slice: usize,
-    /// The current size of each slice in the bloom filter
-    slice_size: usize,
-    /// The current seed
-    curr_seed: u64,
+    desired_error_prob: f64,
+    est_insertions: usize,
+    /// Number of items successfully inserted
+    inserts: usize,
+    /// Item capacity
+    capacity: usize,
 }
 
 impl GrowableBloom {
     const GROWTH_FACTOR: usize = 2;
-    const MAXIMUM_FILL_RATIO: f64 = 0.8;
+    const TIGHTENING_RATIO: f64 = 0.80;
 
     /// Create a new GrowableBloom filter.
     ///
@@ -249,23 +218,13 @@ impl GrowableBloom {
     ///
     /// Panics if desired_error_prob is less then 0 or greater than 1
     pub fn new(desired_error_prob: f64, est_insertions: usize) -> GrowableBloom {
-        assert!(0.0 < desired_error_prob && desired_error_prob <= 1.0);
-        // directly from paper: k ~ log_2(1/desired_error_prob)
-        let opt_num_slices = ((1.0 / desired_error_prob).log2()).ceil();
-        // re-arrange est_insertions ~ M(ln(2)^2 / ln(desired_error_prob))
-        let opt_total_bits = (desired_error_prob.ln().abs() * est_insertions as f64
-            / 2f64.ln().powi(2))
-        .ceil() as usize;
-        let opt_num_slices = opt_num_slices as usize;
-        let slice_size = opt_total_bits / opt_num_slices;
-        let curr_seed = 0;
-        let first_bloom = Bloom::new(opt_num_slices, slice_size, curr_seed);
-        debug_assert!(opt_num_slices > 0);
+        assert!(0.0 < desired_error_prob && desired_error_prob < 1.0);
         GrowableBloom {
-            blooms: vec![first_bloom],
-            curr_num_slice: opt_num_slices,
-            slice_size,
-            curr_seed,
+            blooms: vec![],
+            desired_error_prob,
+            est_insertions,
+            inserts: 0,
+            capacity: 0,
         }
     }
 
@@ -289,7 +248,6 @@ impl GrowableBloom {
     /// assert!(bloom.contains(&item));
     /// ```
     pub fn contains<T: Hash>(&self, item: T) -> bool {
-        debug_assert!(!self.blooms.is_empty());
         self.blooms.iter().any(|bloom| bloom.contains(&item))
     }
 
@@ -313,19 +271,20 @@ impl GrowableBloom {
     /// bloom.insert(&vec![1, 2, 3]);
     /// bloom.insert("hello");
     /// ```
-    pub fn insert<T: Hash>(&mut self, item: T) {
+    pub fn insert<T: Hash>(&mut self, item: T) -> bool {
         // Step 1: Ask if we already have it
-        debug_assert!(!self.blooms.is_empty());
         if self.contains(&item) {
-            return;
+            return false;
         }
-        // Step 2: Insert it into the last
-        let curr_bloom = self.blooms.last_mut().unwrap();
-        curr_bloom.insert(&item);
-        // Step 3: Grow if necessary
-        if curr_bloom.fill_ratio_gte(GrowableBloom::MAXIMUM_FILL_RATIO) {
+        // Step 2: Grow if necessary
+        if self.inserts >= self.capacity {
             self.grow();
         }
+        // Step 3: Insert it into the last
+        self.inserts += 1;
+        let curr_bloom = self.blooms.last_mut().unwrap();
+        curr_bloom.insert(&item);
+        true
     }
 
     /// Clear the bloom filter.
@@ -345,9 +304,12 @@ impl GrowableBloom {
     /// assert!(!bloom.contains(&item)); // No longer contains item
     /// ```
     pub fn clear(&mut self) {
-        for bloom in self.blooms.iter_mut() {
-            bloom.clear()
-        }
+        self.blooms.clear();
+    }
+
+    /// Whether this bloom filter contain any items.
+    pub fn is_empty(&self) -> bool {
+        self.blooms.is_empty()
     }
 
     /// Record if `item` already exists in the filter, and insert it if it doesn't already exist.
@@ -369,20 +331,17 @@ impl GrowableBloom {
     /// assert!(existed_before == true);
     /// ```
     pub fn check_and_set<T: Hash>(&mut self, item: T) -> bool {
-        let prev = self.contains(&item);
-        if !prev {
-            self.insert(item);
-        }
-        prev
+        !self.insert(item)
     }
 
     /// Grow the GrowableBloom
     fn grow(&mut self) {
-        self.curr_num_slice += 1;
-        self.slice_size *= GrowableBloom::GROWTH_FACTOR;
-        self.curr_seed ^= hash_u64(self.curr_seed);
-        let new_bloom = Bloom::new(self.curr_num_slice, self.slice_size, self.curr_seed);
-        self.blooms.push(new_bloom)
+        let error_ratio =
+            self.desired_error_prob * Self::TIGHTENING_RATIO.powi(self.blooms.len() as _);
+        let capacity = self.est_insertions * Self::GROWTH_FACTOR.pow(self.blooms.len() as _);
+        let new_bloom = Bloom::new(capacity, error_ratio);
+        self.blooms.push(new_bloom);
+        self.capacity += capacity;
     }
 }
 
@@ -393,7 +352,7 @@ mod growable_bloom_tests {
 
         #[test]
         fn can_insert_bloom() {
-            let mut b = Bloom::new(2, 1024, 10);
+            let mut b = Bloom::new(100, 0.01);
             let item = 20;
             b.insert(&item);
             assert!(b.contains(&item))
@@ -401,32 +360,14 @@ mod growable_bloom_tests {
 
         #[test]
         fn can_insert_string_bloom() {
-            let mut b = Bloom::new(2, 1024, 10);
+            let mut b = Bloom::new(100, 0.01);
             let item: String = "hello world".to_owned();
             b.insert(&item);
             assert!(b.contains(&item))
         }
-
-        #[test]
-        fn can_clear_bloom() {
-            let mut b = Bloom::new(2, 1024, 10);
-            let item: String = "hello world".to_owned();
-            b.insert(&item);
-            assert!(b.contains(&item));
-            b.clear();
-            assert!(!b.contains(&item));
-        }
-
-        #[test]
-        fn test_slice_bloom() {
-            let mut b = Bloom::new(3, 5, 10);
-            let item: String = "hello world".to_owned();
-            b.insert(&item);
-            assert_eq!(b.field.count_ones(), 3);
-        }
         #[test]
         fn does_not_contain() {
-            let mut b = Bloom::new(2, 1024, 10);
+            let mut b = Bloom::new(100, 0.01);
             let upper = 100;
             for i in (0..upper).step_by(2) {
                 b.insert(&i);
@@ -437,44 +378,17 @@ mod growable_bloom_tests {
             }
         }
         #[test]
-        fn test_seeds() {
-            let mut b1 = Bloom::new(2, 10, 0);
-            let mut b2 = Bloom::new(2, 10, 1);
-            b1.insert(&0);
-            b2.insert(&0);
-            assert_ne!(b1.field, b2.field);
-        }
-        #[test]
         fn can_insert_lots() {
-            let mut b = Bloom::new(2, 1024, 10);
+            let mut b = Bloom::new(100, 0.01);
             for i in 0..1024 {
                 b.insert(&i);
                 assert!(b.contains(&i))
             }
         }
         #[test]
-        fn test_fill_ratio() {
-            let mut b = Bloom::new(2, 2, 0);
-            let item: String = "hello world".to_owned();
-            b.insert(&item);
-            assert_eq!(b.fill_ratio_gte(0.5), true, "There's only two bits set!");
-            assert_eq!(b.fill_ratio_gte(0.1), true);
-            assert_eq!(b.fill_ratio_gte(0.50000000001), false);
-        }
-        #[test]
-        fn slices_are_different() {
-            let slice_len = 128;
-            let mut b = Bloom::new(2, slice_len, 0);
-            let item: String = "hello world".to_owned();
-            b.insert(&item);
-            assert_eq!(b.field[0..slice_len].len(), b.field[slice_len..].len());
-            assert_ne!(b.field[0..slice_len], b.field[slice_len..]);
-        }
-
-        #[test]
         fn test_refs() {
             let item = String::from("Hello World");
-            let mut b = Bloom::new(2, 1024, 10);
+            let mut b = Bloom::new(100, 0.01);
             b.insert(&item);
             assert!(b.contains(&item));
         }
@@ -534,11 +448,24 @@ mod growable_bloom_tests {
 
         #[test]
         fn verify_saturation() {
-            let mut b = GrowableBloom::new(0.50, 100);
-            for i in 0..1000 {
-                b.insert(&i);
+            for &fp in &[0.01, 0.001] {
+                let mut b = GrowableBloom::new(fp, 100);
+                // insert 1000x more elements than initially allocated
+                for i in 1..=100 * 1000 {
+                    b.insert(&i);
+
+                    if i % 500 == 0 {
+                        let est_fp_rate = (i + 1..).take(10_000).filter(|i| b.contains(i)).count()
+                            as f64
+                            / 10_000.0;
+
+                        assert!(est_fp_rate < fp * 10.0);
+                    }
+                }
+                for i in 1..=100 * 1000 {
+                    assert!(b.contains(&i));
+                }
             }
-            assert_eq!(b.contains(&10001), false)
         }
 
         #[test]
@@ -563,7 +490,10 @@ mod growable_bloom_tests {
     mod bench {
         use crate::GrowableBloom;
         use test::Bencher;
-
+        #[bench]
+        fn bench_new(b: &mut Bencher) {
+            b.iter(|| GrowableBloom::new(0.05, 1000));
+        }
         #[bench]
         fn bench_insert_normal_prob(b: &mut Bencher) {
             let mut gbloom = GrowableBloom::new(0.05, 1000);

@@ -18,14 +18,11 @@ struct Bloom {
     /// The actual bit field. Set to 0 with `Bloom::new`.
     #[serde(rename = "b", with = "serde_bytes")]
     buffer: Vec<u8>,
-    /// The number of slices in the bloom filter.
-    /// Equivalent to the hash function in the classic bloom filter.
-    /// A single insertion will result in a single bit being set in each slice.
+    /// The number of slices in the partitioned bloom filter.
+    /// Equivalent to the number of hash function in the classic bloom filter.
+    /// An insertion will result in a bit being set in each slice.
     #[serde(rename = "k")]
     num_slices: usize,
-    /// The _bit_ length of each slice.
-    #[serde(rename = "s")]
-    slice_len: usize,
 }
 
 impl Bloom {
@@ -49,12 +46,7 @@ impl Bloom {
 
         let mut buffer = Vec::with_capacity(buffer_bytes);
         buffer.resize(buffer_bytes, 0);
-        let slice_len = buffer_bytes * 8 / num_slices;
-        Bloom {
-            buffer,
-            num_slices,
-            slice_len,
-        }
+        Bloom { buffer, num_slices }
     }
 
     /// Create an index iterator for a given item.
@@ -67,7 +59,7 @@ impl Bloom {
     /// * `item` - The item to hash.
     fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
         // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
-        let slice_len = self.slice_len;
+        let slice_len = self.buffer.len() * 8 / self.num_slices;
         let (mut h1, mut h2) = double_hashing_hashes(item);
         (0..self.num_slices).map(move |i| {
             let hi = h1 % slice_len + i * slice_len;

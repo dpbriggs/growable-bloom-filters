@@ -444,20 +444,28 @@ mod growable_bloom_tests {
         #[test]
         fn verify_saturation() {
             for &fp in &[0.01, 0.001] {
+                // The paper gives an upper bound formula for the fp rate: fpUB <= fp0*/(1-r)
+                // but for some reason the 0.001 fp bloom filter ends up with a bit higher fp than that
+                // towards the end of the test, when it has 500+ times more items than the initial capacity.
+                // I suspect that's due to our estimation for fill rate (by successful inserts) not being
+                // fully accurate. The accurate way would be to check if 50+% of the bits of the filter are set,
+                // but that's not practical performance wise.
+                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.33;
+
                 let mut b = GrowableBloom::new(fp, 100);
                 // insert 1000x more elements than initially allocated
-                for i in 1..=100 * 1000 {
+                for i in 1..=100 * 1_000 {
                     b.insert(&i);
 
-                    if i % 500 == 0 {
+                    if i % 1_000 == 0 {
                         let est_fp_rate = (i + 1..).take(10_000).filter(|i| b.contains(i)).count()
                             as f64
                             / 10_000.0;
 
-                        assert!(est_fp_rate < fp * 10.0);
+                        assert!(est_fp_rate <= fp_ub);
                     }
                 }
-                for i in 1..=100 * 1000 {
+                for i in 1..=100 * 1_000 {
                     assert!(b.contains(&i));
                 }
             }

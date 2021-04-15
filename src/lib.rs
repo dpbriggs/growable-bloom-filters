@@ -16,13 +16,15 @@ use std::{
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 struct Bloom {
     /// The actual bit field. Set to 0 with `Bloom::new`.
-    #[serde(with = "serde_bytes")]
+    #[serde(rename = "b", with = "serde_bytes")]
     buffer: Vec<u8>,
     /// The number of slices in the bloom filter.
     /// Equivalent to the hash function in the classic bloom filter.
     /// A single insertion will result in a single bit being set in each slice.
+    #[serde(rename = "k")]
     num_slices: usize,
     /// The _bit_ length of each slice.
+    #[serde(rename = "s")]
     slice_len: usize,
 }
 
@@ -180,12 +182,17 @@ fn double_hashing_hashes<T: Hash>(item: T) -> (usize, usize) {
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 pub struct GrowableBloom {
     /// The constituent bloom filters
+    #[serde(rename = "b")]
     blooms: Vec<Bloom>,
+    #[serde(rename = "e")]
     desired_error_prob: f64,
+    #[serde(rename = "t")]
     est_insertions: usize,
     /// Number of items successfully inserted
+    #[serde(rename = "i")]
     inserts: usize,
     /// Item capacity
+    #[serde(rename = "c")]
     capacity: usize,
 }
 

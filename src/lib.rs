@@ -17,7 +17,7 @@ use std::{
 struct Bloom {
     /// The actual bit field. Set to 0 with `Bloom::new`.
     #[serde(rename = "b", with = "serde_bytes")]
-    buffer: Vec<u8>,
+    buffer: Box<[u8]>,
     /// The number of slices in the partitioned bloom filter.
     /// Equivalent to the number of hash function in the classic bloom filter.
     /// An insertion will result in a bit being set in each slice.
@@ -48,7 +48,10 @@ impl Bloom {
 
         let mut buffer = Vec::with_capacity(buffer_bytes);
         buffer.resize(buffer_bytes, 0);
-        Bloom { buffer, num_slices }
+        Bloom {
+            buffer: buffer.into_boxed_slice(),
+            num_slices,
+        }
     }
 
     /// Create an index iterator for a given item.

@@ -53,27 +53,40 @@ impl Bloom {
 
     /// Create an index iterator for a given item.
     ///
-    /// This creates an iterator of `(byte idx, byte mask)` indices in the buffer.
-    /// One per slice.
+    /// This creates an iterator of pairs `(byte, mask)` indices in the buffer.
+    /// The iterator will return one pair of indexes for each slice in the bloom filter.
+    ///
+    /// The pairs `(byte idx, byte mask)` are:
+    ///     byte idx: byte idx in `self.buffer` to be extract for usage with the mask
+    ///     byte mask: bit mask with a single bit set, can be ANDed (`&`) with
+    ///                self.buffer[idx] to yield a number != 0 if the specified bit was set.
+    ///                The mask can also be ORed (`|`) with the self.buffer[idx]
+    ///                to set the corresponding bit.
     ///
     /// # Arguments
     ///
     /// * `item` - The item to hash.
     fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
-        // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
+        // The _bit_ length (thus buffer.len() multiplied by 8) of each slice within buffer.
         let slice_len = self.buffer.len() * 8 / self.num_slices;
+
+        // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
+        // See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
         let (mut h1, mut h2) = double_hashing_hashes(item);
         (0..self.num_slices).map(move |i| {
+            // Calculate hash(i)
             let hi = h1 % slice_len + i * slice_len;
+            // Advance enhanced double hashing state
             h1 = h1.wrapping_add(h2);
             h2 = h2.wrapping_add(i);
-            (hi / 8, 1 << (hi % 8))
+            // Resulting indexes based on hash(i)
+            let idx = hi / 8;
+            let mask = 1 << (hi % 8);
+            (idx, mask)
         })
     }
 
-    /// Insert an *NEW* `item` into the Bloom.
-    /// The caller is expected to check that the item is not contained
-    /// in the filter before calling new.
+    /// Insert an `item` into the Bloom.
     ///
     /// # Arguments
     ///
@@ -92,6 +105,14 @@ impl Bloom {
     /// bloom.insert(&item);
     ///
     fn insert<T: Hash>(&mut self, item: &T) {
+        // Set all bits (one per slice) corresponding to this item.
+        //
+        // Setting the bit:
+        //    1000 0011 (self.buffer[idx])
+        //    0001 0000 (mask)
+        //    |---------
+        //    1001 0011
+        //
         for (byte, mask) in self.index_iterator(item) {
             self.buffer[byte] |= mask;
         }
@@ -113,6 +134,21 @@ impl Bloom {
     /// assert!(bloom.contains(&item));
     ///
     fn contains<T: Hash>(&self, item: &T) -> bool {
+        // Check if all bits (one per slice) corresponding to this item are set.
+        // See index_iterator comments for a detailed explanation.
+        //
+        // Potentially found case:
+        //    0111 1111 (self.buffer[idx])
+        //    0001 0000 (mask)
+        //    &---------
+        //    0001 0000 != 0
+        //
+        // Definitely not found case:
+        //    1110 1111 (self.buffer[idx])
+        //    0001 0000 (mask)
+        //    &---------
+        //    0000 0000 == 0
+        //
         self.index_iterator(item)
             .all(|(byte, mask)| self.buffer[byte] & mask != 0)
     }
@@ -301,19 +337,47 @@ impl GrowableBloom {
     /// ```
     pub fn clear(&mut self) {
         self.blooms.clear();
+        self.inserts = 0;
+        self.capacity = 0;
     }
 
     /// Whether this bloom filter contain any items.
     pub fn is_empty(&self) -> bool {
-        self.blooms.is_empty()
+        self.inserts == 0
     }
 
     /// The current estimated number of elements added to the filter.
+    /// This is an estimation, so it may or may not increase after
+    /// an insertion in the filter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloom;
+    /// let mut bloom = GrowableBloom::new(0.05, 10);
+    ///
+    /// bloom.insert(0);
+    /// assert_eq!(bloom.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.inserts
     }
 
     /// The current estimated capacity of the filter.
+    /// A filter starts with a capacity of 0 but will expand to accommodate more items.
+    /// The actual ratio of increase depends on the values used to construct the bloom filter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloom;
+    /// let mut bloom = GrowableBloom::new(0.05, 10);
+    ///
+    /// assert_eq!(bloom.capacity(), 0);
+    ///
+    /// bloom.insert(0);
+    /// assert_ne!(bloom.capacity(), 0);
+    /// ```
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -342,8 +406,18 @@ impl GrowableBloom {
 
     /// Grow the GrowableBloom
     fn grow(&mut self) {
+        // The paper gives an upper bound formula for the fp rate: fpUB <= fp0 * / (1-r)
+        // This is because each sub bloom filter is created with an ever smaller
+        // false-positive ratio, forming a geometric progression.
+        // let r = TIGHTENING_RATIO
+        // fpUB ~= fp0 * fp0*r * fp0*r*r * fp0*r*r*r ...
+        // fp(x) = fp0 * (r**x)
         let error_ratio =
             self.desired_error_prob * Self::TIGHTENING_RATIO.powi(self.blooms.len() as _);
+        // In order to have relatively small space overhead compared to a single appropriately sized bloom filter
+        // the sub filters should be created with increasingly bigger sizes.
+        // let s = GROWTH_FACTOR
+        // cap(x) = cap0 * (s**x)
         let capacity = self.est_insertions * Self::GROWTH_FACTOR.pow(self.blooms.len() as _);
         let new_bloom = Bloom::new(capacity, error_ratio);
         self.blooms.push(new_bloom);
@@ -410,6 +484,22 @@ mod growable_bloom_tests {
             let item = 20;
             b.insert(&item);
             assert!(b.contains(&item))
+        }
+
+        #[test]
+        fn len_capacity_clear() {
+            let mut b = GrowableBloom::new(0.05, 1000);
+            assert_eq!(b.len(), 0);
+            assert_eq!(b.capacity(), 0);
+
+            let item = 20;
+            b.insert(&item);
+            assert_ne!(b.len(), 0);
+            assert_ne!(b.capacity(), 0);
+
+            b.clear();
+            assert_eq!(b.len(), 0);
+            assert_eq!(b.capacity(), 0);
         }
 
         #[test]

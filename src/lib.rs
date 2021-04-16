@@ -39,10 +39,12 @@ impl Bloom {
         // directly from paper: k ~ log_2(1/desired_error_prob)
         let num_slices = ((1.0 / error_ratio).log2()).ceil() as usize;
         // re-arrange est_insertions ~ M(ln(2)^2 / ln(desired_error_prob))
-        let opt_total_bits =
-            (error_ratio.ln().abs() * capacity as f64 / 2f64.ln().powi(2)).ceil() as usize;
+        let opt_total_bits = (error_ratio.ln().abs() * capacity as f64 / 2f64.ln().powi(2)).ceil();
+        // ensure that all slices are >= the optimal size
+        let opt_slice_len_bits = (opt_total_bits / num_slices as f64).ceil();
+        let actual_total_bits = opt_slice_len_bits as usize * num_slices;
         // round up to the next byte
-        let buffer_bytes = (opt_total_bits + 7) / 8;
+        let buffer_bytes = (actual_total_bits + 7) / 8;
 
         let mut buffer = Vec::with_capacity(buffer_bytes);
         buffer.resize(buffer_bytes, 0);
@@ -459,17 +461,18 @@ mod growable_bloom_tests {
                 // I suspect that's due to our estimation for fill rate (by successful inserts) not being
                 // fully accurate. The accurate way would be to check if 50+% of the bits of the filter are set,
                 // but that's not practical performance wise.
-                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.33;
+                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.2;
 
                 let mut b = GrowableBloom::new(fp, 100);
                 // insert 1000x more elements than initially allocated
                 for i in 1..=100 * 1_000 {
                     b.insert(&i);
 
-                    if i % 1_000 == 0 {
-                        let est_fp_rate = (i + 1..).take(10_000).filter(|i| b.contains(i)).count()
+                    if i % 10_000 == 0 {
+                        // A lot of tests are required to get a good estimate
+                        let est_fp_rate = (i + 1..).take(50_000).filter(|i| b.contains(i)).count()
                             as f64
-                            / 10_000.0;
+                            / 50_000.0;
 
                         assert!(est_fp_rate <= fp_ub);
                     }

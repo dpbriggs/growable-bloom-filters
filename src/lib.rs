@@ -306,6 +306,16 @@ impl GrowableBloom {
         self.blooms.is_empty()
     }
 
+    /// The current estimated number of elements added to the filter.
+    pub fn len(&self) -> usize {
+        self.inserts
+    }
+
+    /// The current estimated capacity of the filter.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Record if `item` already exists in the filter, and insert it if it doesn't already exist.
     ///
     /// Returns `true` if the item already existed in the filter.

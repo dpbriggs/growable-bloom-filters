@@ -1,21 +1,21 @@
 
 # Table of Contents
 
-1.  [Growable Bloom Filters](#orgc836e6e)
-    1.  [Overview](#org29257da)
-    2.  [Applications](#orgb25d40f)
+1.  [Growable Bloom Filters](#org83681a5)
+    1.  [Overview](#orgba82373)
+    2.  [Applications](#org5789605)
 
 [![img](https://github.com/dpbriggs/growable-bloom-filters/workflows/Growable%20Bloom%20Filters/badge.svg)](https://github.com/dpbriggs/growable-bloom-filters)
 
 
-<a id="orgc836e6e"></a>
+<a id="org83681a5"></a>
 
 # Growable Bloom Filters
 
 [CRATES.IO](https://crates.io/crates/growable-bloom-filter) | [DOCUMENTATION](https://docs.rs/growable-bloom-filter/latest/growable_bloom_filter/struct.GrowableBloom.html)
 
 
-<a id="org29257da"></a>
+<a id="orgba82373"></a>
 
 ## Overview
 
@@ -40,7 +40,7 @@ You can control the failure rate by setting `desired_error_prob` and `est_insert
     assert!(des_gbloom.contains(&0));
 
 
-<a id="orgb25d40f"></a>
+<a id="org5789605"></a>
 
 ## Applications
 

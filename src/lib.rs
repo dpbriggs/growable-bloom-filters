@@ -10,6 +10,7 @@ use serde_derive::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
     iter::Iterator,
+    num::NonZeroU64,
 };
 
 /// Base Bloom Filter
@@ -22,35 +23,39 @@ struct Bloom {
     /// Equivalent to the number of hash function in the classic bloom filter.
     /// An insertion will result in a bit being set in each slice.
     #[serde(rename = "k")]
-    num_slices: usize,
+    num_slices: NonZeroU64,
 }
 
 impl Bloom {
-    /// Create a new Bloom filter
+    /// Create a new Bloom filter (specifically, a Partitioned Bloom filter)
     ///
     /// # Arguments
     ///
     /// * `capacity` - target capacity.
-    /// * `error_ratio` - false positive ratio [0..1.0].
+    /// * `error_ratio` - false positive ratio (0..1.0).
     /// * `seed` - a seed to be used to initialize the hasher.
     fn new(capacity: usize, error_ratio: f64) -> Bloom {
+        // Directly from paper:
+        // k = log2(1/P)   (num_slices)
+        // n ≈ −m ln(1−p)  (slice_len_bits)
+        // M = k * m       (total_bits)
+        // for optimal filter p = 0.5, which gives:
+        // n ≈ −m ln(0.5), rearranging: m = -n / ln(0.5), rearranging: m = n / log 2
         debug_assert!(capacity >= 1);
         debug_assert!(0.0 < error_ratio && error_ratio < 1.0);
-        // directly from paper: k ~ log_2(1/desired_error_prob)
-        let num_slices = ((1.0 / error_ratio).log2()).ceil() as usize;
-        // re-arrange est_insertions ~ M(ln(2)^2 / ln(desired_error_prob))
-        let opt_total_bits = (error_ratio.ln().abs() * capacity as f64 / 2f64.ln().powi(2)).ceil();
-        // ensure that all slices are >= the optimal size
-        let opt_slice_len_bits = (opt_total_bits / num_slices as f64).ceil();
-        let actual_total_bits = opt_slice_len_bits as usize * num_slices;
+        // We're using ceil instead of round in order to get an error rate <= the desired.
+        // Using round can result in significantly higher error rates.
+        let num_slices = ((1.0 / error_ratio).log2()).ceil() as u64;
+        let slice_len_bits = (capacity as f64 / 2f64.ln()).ceil() as u64;
+        let total_bits = num_slices * slice_len_bits;
         // round up to the next byte
-        let buffer_bytes = (actual_total_bits + 7) / 8;
+        let buffer_bytes = ((total_bits + 7) / 8) as usize;
 
         let mut buffer = Vec::with_capacity(buffer_bytes);
         buffer.resize(buffer_bytes, 0);
         Bloom {
             buffer: buffer.into_boxed_slice(),
-            num_slices,
+            num_slices: NonZeroU64::new(num_slices).unwrap(),
         }
     }
 
@@ -71,14 +76,17 @@ impl Bloom {
     /// * `item` - The item to hash.
     fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
         // The _bit_ length (thus buffer.len() multiplied by 8) of each slice within buffer.
-        let slice_len = self.buffer.len() as u64 * 8 / self.num_slices as u64;
+        // We'll use a NonZero type so that the compiler can avoid checking for
+        // division/modulus by 0 inside the iterator.
+        let slice_len = NonZeroU64::new(self.buffer.len() as u64 * 8 / self.num_slices).unwrap();
 
         // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
         // See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
+        // We choose to use 2x64 bit hashes instead of 2x32 ones as it gives significant better false positive ratios.
         let (mut h1, mut h2) = double_hashing_hashes(item);
-        (0..self.num_slices as u64).map(move |i| {
+        (0..self.num_slices.get()).map(move |i| {
             // Calculate hash(i)
-            let hi = h1 % slice_len + i * slice_len;
+            let hi = h1 % slice_len + i * slice_len.get();
             // Advance enhanced double hashing state
             h1 = h1.wrapping_add(h2);
             h2 = h2.wrapping_add(i);
@@ -157,19 +165,15 @@ impl Bloom {
     }
 }
 
-/// Returns 2 hashes for the given item
 fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
-    // Using seahash v4 as a portable hasher
-    let mut hasher = seahash::SeaHasher::with_seeds(
-        0x16f11fe89b0d677c,
-        0xb480a793d8e6c86c,
-        0x6fe2e5aaf078ebc9,
-        0x14f994a4c5259381,
-    );
+    // Using xxh3-64 with default seed/secret as a portable hasher.
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
     item.hash(&mut hasher);
     let h1 = hasher.finish();
 
-    // write a nul byte to the existing state and get another hash
+    // Write a nul byte to the existing state and get another hash.
+    // This is appropriate when using a very high quality hasher,
+    // which we know is the case.
     0u8.hash(&mut hasher);
     // h2 hash shouldn't be 0 for double hashing
     let h2 = hasher.finish().max(1);
@@ -229,8 +233,12 @@ pub struct GrowableBloom {
 }
 
 impl GrowableBloom {
+    // From the paper:
+    // Considering the choice of s (GROWTH_FACTOR) = 2 for small expected growth and s = 4
+    // for larger growth, one can see that r (TIGHTENING_RATIO) around 0.8 – 0.9 is a sensible choice.
+    // Here we select good defaults for 10~1000x growth.
     const GROWTH_FACTOR: usize = 2;
-    const TIGHTENING_RATIO: f64 = 0.80;
+    const TIGHTENING_RATIO: f64 = 0.8515625; // ~0.85 but has exact representation in f32/f64
 
     /// Create a new GrowableBloom filter.
     ///
@@ -548,23 +556,33 @@ mod growable_bloom_tests {
         fn verify_saturation() {
             for &fp in &[0.01, 0.001] {
                 // The paper gives an upper bound formula for the fp rate: fpUB <= fp0*/(1-r)
-                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.1;
-
-                let mut b = GrowableBloom::new(fp, 100);
+                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO);
+                let initial_cap = 100u64;
+                let growth = 1000u64;
+                let mut b = GrowableBloom::new(fp, initial_cap as usize);
                 // insert 1000x more elements than initially allocated
-                for i in 1..=100 * 1_000 {
+                for i in 1u64..=initial_cap * growth {
                     b.insert(&i);
 
-                    if i % 10_000 == 0 {
+                    if i % (initial_cap * growth / 10) == 0
+                        || [1, 2, 5, 10, 25].iter().any(|&g| i == initial_cap * g)
+                    {
                         // A lot of tests are required to get a good estimate
                         let est_fp_rate = (i + 1..).take(50_000).filter(|i| b.contains(i)).count()
                             as f64
                             / 50_000.0;
 
+                        // Uncomment the following to get good output for experiments
+                        // println!(
+                        //     "{}x cap: {}fp ({}x)",
+                        //     i / initial_cap,
+                        //     est_fp_rate,
+                        //     est_fp_rate / fp
+                        // );
                         assert!(est_fp_rate <= fp_ub);
                     }
                 }
-                for i in 1..=100 * 1_000 {
+                for i in 1u64..=initial_cap * growth {
                     assert!(b.contains(&i));
                 }
             }
@@ -612,7 +630,7 @@ mod growable_bloom_tests {
             b.iter(|| gbloom.insert(10));
         }
         #[bench]
-        fn bench_insert_string(b: &mut Bencher) {
+        fn bench_insert_medium(b: &mut Bencher) {
             let s: String = (0..100).map(|_| 'X').collect();
             let mut gbloom = GrowableBloom::new(0.05, 100000);
             b.iter(|| gbloom.insert(&s))

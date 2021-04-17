@@ -71,20 +71,20 @@ impl Bloom {
     /// * `item` - The item to hash.
     fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
         // The _bit_ length (thus buffer.len() multiplied by 8) of each slice within buffer.
-        let slice_len = self.buffer.len() * 8 / self.num_slices;
+        let slice_len = self.buffer.len() as u64 * 8 / self.num_slices as u64;
 
         // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
         // See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
         let (mut h1, mut h2) = double_hashing_hashes(item);
-        (0..self.num_slices).map(move |i| {
+        (0..self.num_slices as u64).map(move |i| {
             // Calculate hash(i)
             let hi = h1 % slice_len + i * slice_len;
             // Advance enhanced double hashing state
             h1 = h1.wrapping_add(h2);
             h2 = h2.wrapping_add(i);
-            // Resulting indexes based on hash(i)
-            let idx = hi / 8;
-            let mask = 1 << (hi % 8);
+            // Resulting index/mask based on hash(i)
+            let idx = (hi / 8) as usize;
+            let mask = 1u8 << (hi % 8);
             (idx, mask)
         })
     }
@@ -158,24 +158,23 @@ impl Bloom {
 }
 
 /// Returns 2 hashes for the given item
-fn double_hashing_hashes<T: Hash>(item: T) -> (usize, usize) {
-    let mut hs = ahash::AHasher::new_with_keys(
-        0xe7b0c93ca8525013011d02b854ae8182,
-        0x7bcc5cf9c39cec76fa336285d102d083,
+fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
+    // Using seahash v4 as a portable hasher
+    let mut hasher = seahash::SeaHasher::with_seeds(
+        0x16f11fe89b0d677c,
+        0xb480a793d8e6c86c,
+        0x6fe2e5aaf078ebc9,
+        0x14f994a4c5259381,
     );
-    item.hash(&mut hs);
-    let h1 = hs.finish();
+    item.hash(&mut hasher);
+    let h1 = hasher.finish();
 
-    hs = ahash::AHasher::new_with_keys(
-        0x16f11fe89b0d677cb480a793d8e6c86c,
-        0x6fe2e5aaf078ebc914f994a4c5259381,
-    );
-    item.hash(&mut hs);
-
+    // write a nul byte to the existing state and get another hash
+    0u8.hash(&mut hasher);
     // h2 hash shouldn't be 0 for double hashing
-    let h2 = hs.finish().max(1);
+    let h2 = hasher.finish().max(1);
 
-    (h1 as _, h2 as _)
+    (h1, h2)
 }
 
 /// A Growable Bloom Filter
@@ -549,12 +548,7 @@ mod growable_bloom_tests {
         fn verify_saturation() {
             for &fp in &[0.01, 0.001] {
                 // The paper gives an upper bound formula for the fp rate: fpUB <= fp0*/(1-r)
-                // but for some reason the 0.001 fp bloom filter ends up with a bit higher fp than that
-                // towards the end of the test, when it has 500+ times more items than the initial capacity.
-                // I suspect that's due to our estimation for fill rate (by successful inserts) not being
-                // fully accurate. The accurate way would be to check if 50+% of the bits of the filter are set,
-                // but that's not practical performance wise.
-                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.2;
+                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO) * 1.1;
 
                 let mut b = GrowableBloom::new(fp, 100);
                 // insert 1000x more elements than initially allocated

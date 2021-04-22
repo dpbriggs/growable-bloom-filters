@@ -40,7 +40,7 @@ impl Bloom {
         // n ≈ −m ln(1−p)  (slice_len_bits)
         // M = k * m       (total_bits)
         // for optimal filter p = 0.5, which gives:
-        // n ≈ −m ln(0.5), rearranging: m = -n / ln(0.5), rearranging: m = n / log 2
+        // n ≈ −m ln(0.5), rearranging: m = -n / ln(0.5) = n / ln(2)
         debug_assert!(capacity >= 1);
         debug_assert!(0.0 < error_ratio && error_ratio < 1.0);
         // We're using ceil instead of round in order to get an error rate <= the desired.

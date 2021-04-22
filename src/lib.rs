@@ -13,6 +13,8 @@ use std::{
     num::NonZeroU64,
 };
 
+mod stable_hasher;
+
 /// Base Bloom Filter
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 struct Bloom {
@@ -168,8 +170,7 @@ impl Bloom {
 /// Return 2 hashes for `item` that can be used as h1 and h2 fordouble hashing.
 /// See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
 fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
-    // Using xxh3-64 with default seed/secret as a portable hasher.
-    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    let mut hasher = stable_hasher::StableHasher::new();
     item.hash(&mut hasher);
     let h1 = hasher.finish();
 

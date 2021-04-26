@@ -76,7 +76,8 @@ impl Bloom {
     /// # Arguments
     ///
     /// * `item` - The item to hash.
-    fn index_iterator<T: Hash>(&self, item: T) -> impl Iterator<Item = (usize, u8)> {
+    #[inline]
+    fn index_iterator(&self, mut h1: u64, mut h2: u64) -> impl Iterator<Item = (usize, u8)> {
         // The _bit_ length (thus buffer.len() multiplied by 8) of each slice within buffer.
         // We'll use a NonZero type so that the compiler can avoid checking for
         // division/modulus by 0 inside the iterator.
@@ -85,7 +86,7 @@ impl Bloom {
         // Generate `self.num_slices` hashes from 2 hashes, using enhanced double hashing.
         // See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
         // We choose to use 2x64 bit hashes instead of 2x32 ones as it gives significant better false positive ratios.
-        let (mut h1, mut h2) = double_hashing_hashes(item);
+        debug_assert_ne!(h2, 0, "Second hash can't be 0 for double hashing");
         (0..self.num_slices.get()).map(move |i| {
             // Calculate hash(i)
             let hi = h1 % slice_len + i * slice_len.get();
@@ -99,11 +100,11 @@ impl Bloom {
         })
     }
 
-    /// Insert an `item` into the Bloom.
-    ///
+    /// Insert an item identified by two hashes is in the Bloom.
     /// # Arguments
     ///
-    /// * `item` - The item to insert
+    /// * `h1` - The main hash
+    /// * `h2` - The second hash (must be != 0)
     ///
     /// # Example
     ///
@@ -111,13 +112,11 @@ impl Bloom {
     /// use growable_bloom_filter::Bloom;
     /// let bloom = Bloom::new(2, 128);
     ///
-    /// let item = 0;
-    /// bloom.insert(&item);
+    /// let (h1, h2) = double_hashing_hashes("my-item");
+    /// bloom.insert(h1, h2);
     ///
-    /// let item = "Hello World".to_owned();
-    /// bloom.insert(&item);
-    ///
-    fn insert<T: Hash>(&mut self, item: &T) {
+    #[inline]
+    fn insert(&mut self, h1: u64, h2: u64) {
         // Set all bits (one per slice) corresponding to this item.
         //
         // Setting the bit:
@@ -126,27 +125,30 @@ impl Bloom {
         //    |---------
         //    1001 0011
         //
-        for (byte, mask) in self.index_iterator(item) {
+        for (byte, mask) in self.index_iterator(h1, h2) {
             self.buffer[byte] |= mask;
         }
     }
 
-    /// Test if `item` is in the Bloom.
+    /// Test if item identified by two hashes is in the Bloom.
     ///
     /// # Arguments
     ///
-    /// * `item` - The item to test
+    /// * `h1` - The main hash
+    /// * `h2` - The second hash (must be != 0)
     ///
     /// # Example
     ///
     ///
     /// let bloom = Bloom:new(2, 128);
-    /// let item = 0;
     ///
-    /// bloom.insert(&item);
-    /// assert!(bloom.contains(&item));
+    /// let (h1, h2) = double_hashing_hashes("my-item");
+    /// bloom.insert(h1, h2);
     ///
-    fn contains<T: Hash>(&self, item: &T) -> bool {
+    /// assert!(bloom.contains(h1, h2));
+    ///
+    #[inline]
+    fn contains(&self, h1: u64, h2: u64) -> bool {
         // Check if all bits (one per slice) corresponding to this item are set.
         // See index_iterator comments for a detailed explanation.
         //
@@ -162,13 +164,14 @@ impl Bloom {
         //    &---------
         //    0000 0000 == 0
         //
-        self.index_iterator(item)
+        self.index_iterator(h1, h2)
             .all(|(byte, mask)| self.buffer[byte] & mask != 0)
     }
 }
 
 /// Return 2 hashes for `item` that can be used as h1 and h2 fordouble hashing.
 /// See https://en.wikipedia.org/wiki/Double_hashing#Enhanced_double_hashing for details.
+#[inline]
 fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
     let mut hasher = stable_hasher::StableHasher::new();
     item.hash(&mut hasher);
@@ -262,6 +265,7 @@ impl GrowableBloom {
     /// # Panics
     ///
     /// Panics if desired_error_prob is less then 0 or greater than 1
+    #[inline]
     pub fn new(desired_error_prob: f64, est_insertions: usize) -> GrowableBloom {
         assert!(0.0 < desired_error_prob && desired_error_prob < 1.0);
         GrowableBloom {
@@ -293,7 +297,8 @@ impl GrowableBloom {
     /// assert!(bloom.contains(&item));
     /// ```
     pub fn contains<T: Hash>(&self, item: T) -> bool {
-        self.blooms.iter().any(|bloom| bloom.contains(&item))
+        let (h1, h2) = double_hashing_hashes(item);
+        self.blooms.iter().any(|bloom| bloom.contains(h1, h2))
     }
 
     /// Insert `item` into the filter.
@@ -317,8 +322,9 @@ impl GrowableBloom {
     /// bloom.insert("hello");
     /// ```
     pub fn insert<T: Hash>(&mut self, item: T) -> bool {
+        let (h1, h2) = double_hashing_hashes(item);
         // Step 1: Ask if we already have it
-        if self.contains(&item) {
+        if self.blooms.iter().any(|bloom| bloom.contains(h1, h2)) {
             return false;
         }
         // Step 2: Grow if necessary
@@ -328,7 +334,7 @@ impl GrowableBloom {
         // Step 3: Insert it into the last
         self.inserts += 1;
         let curr_bloom = self.blooms.last_mut().unwrap();
-        curr_bloom.insert(&item);
+        curr_bloom.insert(h1, h2);
         true
     }
 
@@ -355,6 +361,7 @@ impl GrowableBloom {
     }
 
     /// Whether this bloom filter contain any items.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inserts == 0
     }
@@ -372,6 +379,7 @@ impl GrowableBloom {
     /// bloom.insert(0);
     /// assert_eq!(bloom.len(), 1);
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
         self.inserts
     }
@@ -391,6 +399,7 @@ impl GrowableBloom {
     /// bloom.insert(0);
     /// assert_ne!(bloom.capacity(), 0);
     /// ```
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -441,49 +450,54 @@ impl GrowableBloom {
 #[cfg(test)]
 mod growable_bloom_tests {
     mod test_bloom {
-        use crate::Bloom;
+        use crate::{double_hashing_hashes, Bloom};
 
         #[test]
         fn can_insert_bloom() {
             let mut b = Bloom::new(100, 0.01);
-            let item = 20;
-            b.insert(&item);
-            assert!(b.contains(&item))
+            let (h1, h2) = double_hashing_hashes(123);
+            b.insert(h1, h2);
+            assert!(b.contains(h1, h2))
         }
 
         #[test]
         fn can_insert_string_bloom() {
             let mut b = Bloom::new(100, 0.01);
-            let item: String = "hello world".to_owned();
-            b.insert(&item);
-            assert!(b.contains(&item))
+            let (h1, h2) = double_hashing_hashes("hello world".to_string());
+            b.insert(h1, h2);
+            assert!(b.contains(h1, h2))
         }
+
         #[test]
         fn does_not_contain() {
             let mut b = Bloom::new(100, 0.01);
             let upper = 100;
             for i in (0..upper).step_by(2) {
-                b.insert(&i);
-                assert_eq!(b.contains(&i), true);
+                let (h1, h2) = double_hashing_hashes(i);
+                b.insert(h1, h2);
+                assert!(b.contains(h1, h2))
             }
             for i in (1..upper).step_by(2) {
-                assert_eq!(b.contains(&i), false);
+                let (h1, h2) = double_hashing_hashes(i);
+                assert!(!b.contains(h1, h2))
             }
         }
         #[test]
         fn can_insert_lots() {
             let mut b = Bloom::new(100, 0.01);
             for i in 0..1024 {
-                b.insert(&i);
-                assert!(b.contains(&i))
+                let (h1, h2) = double_hashing_hashes(i);
+                b.insert(h1, h2);
+                assert!(b.contains(h1, h2))
             }
         }
         #[test]
         fn test_refs() {
             let item = String::from("Hello World");
             let mut b = Bloom::new(100, 0.01);
-            b.insert(&item);
-            assert!(b.contains(&item));
+            let (h1, h2) = double_hashing_hashes(&item);
+            b.insert(h1, h2);
+            assert!(b.contains(h1, h2))
         }
     }
 

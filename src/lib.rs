@@ -615,46 +615,46 @@ mod growable_bloom_tests {
         use test::Bencher;
         #[bench]
         fn bench_new(b: &mut Bencher) {
-            b.iter(|| GrowableBloom::new(0.05, 1000));
+            b.iter(|| GrowableBloom::new(0.01, 1000));
         }
         #[bench]
         fn bench_insert_normal_prob(b: &mut Bencher) {
-            let mut gbloom = GrowableBloom::new(0.05, 1000);
+            let mut gbloom = GrowableBloom::new(0.01, 1000);
             b.iter(|| gbloom.insert(10));
         }
         #[bench]
         fn bench_insert_small_prob(b: &mut Bencher) {
-            let mut gbloom = GrowableBloom::new(0.0005, 1000);
+            let mut gbloom = GrowableBloom::new(0.001, 1000);
             b.iter(|| gbloom.insert(10));
         }
         #[bench]
         fn bench_many(b: &mut Bencher) {
-            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            let mut gbloom = GrowableBloom::new(0.01, 100000);
             b.iter(|| gbloom.insert(10));
         }
         #[bench]
         fn bench_insert_medium(b: &mut Bencher) {
             let s: String = (0..100).map(|_| 'X').collect();
-            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            let mut gbloom = GrowableBloom::new(0.01, 100000);
             b.iter(|| gbloom.insert(&s))
         }
         #[bench]
         fn bench_insert_large(b: &mut Bencher) {
             let s: String = (0..10000).map(|_| 'X').collect();
-            let mut gbloom = GrowableBloom::new(0.05, 100000);
+            let mut gbloom = GrowableBloom::new(0.01, 100000);
             b.iter(|| gbloom.insert(&s))
         }
         #[bench]
         fn bench_insert_large_very_small_prob(b: &mut Bencher) {
             let s: String = (0..10000).map(|_| 'X').collect();
-            let mut gbloom = GrowableBloom::new(0.000005, 100000);
+            let mut gbloom = GrowableBloom::new(0.0001, 100000);
             b.iter(|| gbloom.insert(&s))
         }
         #[bench]
         fn bench_grow(b: &mut Bencher) {
-            let mut gbloom = GrowableBloom::new(0.90, 1);
             b.iter(|| {
-                for i in 0..100 {
+                let mut gbloom = GrowableBloom::new(0.01, 100);
+                for i in 0..1000 {
                     gbloom.insert(&i);
                     assert!(gbloom.contains(&i));
                 }

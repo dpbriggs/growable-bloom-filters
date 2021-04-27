@@ -48,3 +48,9 @@ Bloom filters are typically used as a pre-cache to avoid expensive operations.
 For example, if you need to ask ten thousand servers if they have data XYZ,
 you could use GrowableBloom to figure out which ones do NOT have XYZ.
 
+## Stability
+
+The (de)serialized bloom filter can be transferred and used across different
+platforms, idependent of endianess, architecture and word size.
+
+Note that stability is only guaranteed within the same major version of the crate.

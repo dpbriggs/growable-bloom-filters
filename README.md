@@ -1,21 +1,9 @@
-
-# Table of Contents
-
-1.  [Growable Bloom Filters](#org83681a5)
-    1.  [Overview](#orgba82373)
-    2.  [Applications](#org5789605)
-
 [![img](https://github.com/dpbriggs/growable-bloom-filters/workflows/Growable%20Bloom%20Filters/badge.svg)](https://github.com/dpbriggs/growable-bloom-filters)
 
-
-<a id="org83681a5"></a>
 
 # Growable Bloom Filters
 
 [CRATES.IO](https://crates.io/crates/growable-bloom-filter) | [DOCUMENTATION](https://docs.rs/growable-bloom-filter/latest/growable_bloom_filter/struct.GrowableBloom.html)
-
-
-<a id="orgba82373"></a>
 
 ## Overview
 
@@ -28,19 +16,21 @@ But if `contains` returns false, it's definitely not in the bloom filter.
 
 You can control the failure rate by setting `desired_error_prob` and `est_insertions` appropriately.
 
-    use serde_json;
-    use growable_bloom_filter::GrowableBloom;
-    
-    let mut gbloom = GrowableBloom::new(0.05, 1000);
-    gbloom.insert(&0);
-    assert!(gbloom.contains(&0));
-    
-    let s = serde_json::to_string(&gbloom).unwrap();
-    let des_gbloom: GrowableBloom = serde_json::from_str(&s).unwrap();
-    assert!(des_gbloom.contains(&0));
+```rust
+use growable_bloom_filter::GrowableBloom;
 
+// Create and insert into the bloom filter
+let mut gbloom = GrowableBloom::new(0.05, 1000);
+gbloom.insert(&0);
+assert!(gbloom.contains(&0));
 
-<a id="org5789605"></a>
+// Serialize and Deserialize the bloom filter
+use serde_json;
+
+let s = serde_json::to_string(&gbloom).unwrap();
+let des_gbloom: GrowableBloom = serde_json::from_str(&s).unwrap();
+assert!(des_gbloom.contains(&0));
+```
 
 ## Applications
 
@@ -54,3 +44,8 @@ The (de)serialized bloom filter can be transferred and used across different
 platforms, idependent of endianess, architecture and word size.
 
 Note that stability is only guaranteed within the same major version of the crate.
+
+## Upgrading from 1.x to 2.x
+
+- Any 1.x serialized bloom filters will no longer be loadable in 2.x.
+- Minor API changes otherwise.

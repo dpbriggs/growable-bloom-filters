@@ -139,7 +139,6 @@ impl Bloom {
     ///
     /// # Example
     ///
-    ///
     /// let bloom = Bloom:new(2, 128);
     ///
     /// let (h1, h2) = double_hashing_hashes("my-item");
@@ -210,12 +209,15 @@ fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
 /// # Example
 ///
 /// ```rust
-/// use serde_json;
 /// use growable_bloom_filter::GrowableBloom;
 ///
+/// // Create and insert into the bloom filter
 /// let mut gbloom = GrowableBloom::new(0.05, 1000);
 /// gbloom.insert(&0);
 /// assert!(gbloom.contains(&0));
+///
+/// // Serialize and Deserialize the bloom filter
+/// use serde_json;
 ///
 /// let s = serde_json::to_string(&gbloom).unwrap();
 /// let des_gbloom: GrowableBloom = serde_json::from_str(&s).unwrap();
@@ -253,9 +255,11 @@ impl GrowableBloom {
     /// * `desired_error_prob` - The desired error probability (eg. 0.05, 0.01)
     /// * `est_insertions` - The estimated number of insertions (eg. 100, 1000)
     ///
-    /// NOTE: You really don't need to be accurate with est_insertions.
+    /// Note: You really don't need to be accurate with est_insertions.
     ///       Power of 10 granularity should be fine.
+    ///
     /// # Example
+    ///
     /// ```rust
     /// // 5% failure rate, estimated 100 elements to insert
     /// use growable_bloom_filter::GrowableBloom;
@@ -388,6 +392,10 @@ impl GrowableBloom {
     /// A filter starts with a capacity of 0 but will expand to accommodate more items.
     /// The actual ratio of increase depends on the values used to construct the bloom filter.
     ///
+    /// Note: An empty filter has capacity zero as we haven't calculated
+    ///       the necessary bloom filter size. Subsequent inserts will result
+    ///       in the capacity updating.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -397,6 +405,7 @@ impl GrowableBloom {
     /// assert_eq!(bloom.capacity(), 0);
     ///
     /// bloom.insert(0);
+    /// // After an insert, our capacity is no longer zero.
     /// assert_ne!(bloom.capacity(), 0);
     /// ```
     #[inline]
@@ -419,6 +428,7 @@ impl GrowableBloom {
     ///
     /// let existed_before = bloom.check_and_set(&item);
     /// assert!(existed_before == false);
+    ///
     /// let existed_before = bloom.check_and_set(&item);
     /// assert!(existed_before == true);
     /// ```
@@ -515,7 +525,7 @@ mod growable_bloom_tests {
 
         #[test]
         fn len_capacity_clear() {
-            let mut b = GrowableBloom::new(0.05, 1000);
+            let mut b = GrowableBloom::new(0.05, 100);
             assert_eq!(b.len(), 0);
             assert_eq!(b.capacity(), 0);
 
@@ -527,6 +537,18 @@ mod growable_bloom_tests {
             b.clear();
             assert_eq!(b.len(), 0);
             assert_eq!(b.capacity(), 0);
+        }
+
+        #[test]
+        fn ensure_capacity() {
+            let mut b = GrowableBloom::new(0.05, 1);
+            assert_eq!(b.capacity(), 0);
+            b.insert("abc");
+            assert_eq!(b.capacity(), 1);
+            for i in 0..100 {
+                b.insert(i);
+            }
+            assert_eq!(b.capacity(), 127);
         }
 
         #[test]

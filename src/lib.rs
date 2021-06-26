@@ -283,7 +283,7 @@ impl GrowableBloom {
 
     /// Test if `item` in the Bloom filter.
     ///
-    /// If `true` is returned, it's _may_ be in the filter.
+    /// If `true` is returned, it _may_ be in the filter.
     /// If `false` is returned, it's NOT in the filter.
     ///
     /// # Arguments

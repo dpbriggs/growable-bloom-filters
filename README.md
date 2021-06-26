@@ -41,7 +41,7 @@ you could use GrowableBloom to figure out which ones do NOT have XYZ.
 ## Stability
 
 The (de)serialized bloom filter can be transferred and used across different
-platforms, idependent of endianess, architecture and word size.
+platforms, independent of endianness, architecture or word size.
 
 Note that stability is only guaranteed within the same major version of the crate.
 

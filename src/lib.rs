@@ -35,7 +35,6 @@ impl Bloom {
     ///
     /// * `capacity` - target capacity.
     /// * `error_ratio` - false positive ratio (0..1.0).
-    /// * `seed` - a seed to be used to initialize the hasher.
     fn new(capacity: usize, error_ratio: f64) -> Bloom {
         // Directly from paper:
         // k = log2(1/P)   (num_slices)
@@ -186,6 +185,21 @@ fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
     (h1, h2)
 }
 
+// From the paper:
+// Considering the choice of s (GROWTH_FACTOR) = 2 for small expected growth and s = 4
+// for larger growth, one can see that r (TIGHTENING_RATIO) around 0.8 – 0.9 is a sensible choice.
+// Here we select good defaults for 10~1000x growth.
+const DEFAULT_GROWTH_FACTOR: usize = 2;
+const DEFAULT_TIGHTENING_RATIO: f64 = 0.8515625; // ~0.85 but has exact representation in f32/f64
+
+const fn default_growth_factor() -> usize {
+    DEFAULT_GROWTH_FACTOR
+}
+
+const fn default_tightening_ratio() -> f64 {
+    DEFAULT_TIGHTENING_RATIO
+}
+
 /// A Growable Bloom Filter
 ///
 /// # Overview
@@ -222,6 +236,15 @@ fn double_hashing_hashes<T: Hash>(item: T) -> (u64, u64) {
 /// let s = serde_json::to_string(&gbloom).unwrap();
 /// let des_gbloom: GrowableBloom = serde_json::from_str(&s).unwrap();
 /// assert!(des_gbloom.contains(&0));
+///
+/// // Builder API
+/// use growable_bloom_filter::GrowableBloomBuilder;
+/// let mut gbloom = GrowableBloomBuilder::new()
+///     .estimated_insertions(100)
+///     .desired_error_ratio(0.05)
+///     .build();
+/// gbloom.insert(&0);
+/// assert!(gbloom.contains(&0));
 /// ```
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 pub struct GrowableBloom {
@@ -238,16 +261,14 @@ pub struct GrowableBloom {
     /// Item capacity
     #[serde(rename = "c")]
     capacity: usize,
+    /// Growth factor
+    #[serde(rename = "g", default = "default_growth_factor")]
+    growth_factor: usize,
+    #[serde(rename = "r", default = "default_tightening_ratio")]
+    tightening_ratio: f64,
 }
 
 impl GrowableBloom {
-    // From the paper:
-    // Considering the choice of s (GROWTH_FACTOR) = 2 for small expected growth and s = 4
-    // for larger growth, one can see that r (TIGHTENING_RATIO) around 0.8 – 0.9 is a sensible choice.
-    // Here we select good defaults for 10~1000x growth.
-    const GROWTH_FACTOR: usize = 2;
-    const TIGHTENING_RATIO: f64 = 0.8515625; // ~0.85 but has exact representation in f32/f64
-
     /// Create a new GrowableBloom filter.
     ///
     /// # Arguments
@@ -269,15 +290,46 @@ impl GrowableBloom {
     /// # Panics
     ///
     /// Panics if desired_error_prob is less then 0 or greater than 1
+    ///
+    /// # Builder API
+    /// An alternative way to construct a GrowableBloom.
+    ///
+    /// See [`GrowableBloomBuilder`] for documentation. It allows you to specify
+    /// other constants to control bloom filter behaviour.
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloomBuilder;
+    /// let mut gbloom = GrowableBloomBuilder::new()
+    ///     .estimated_insertions(100)
+    ///     .desired_error_ratio(0.05)
+    ///     .build();
+    /// ```
     #[inline]
     pub fn new(desired_error_prob: f64, est_insertions: usize) -> GrowableBloom {
+        Self::new_with_internals(
+            desired_error_prob,
+            est_insertions,
+            DEFAULT_GROWTH_FACTOR,
+            DEFAULT_TIGHTENING_RATIO,
+        )
+    }
+
+    pub(crate) fn new_with_internals(
+        desired_error_prob: f64,
+        est_insertions: usize,
+        growth_factor: usize,
+        tightening_ratio: f64,
+    ) -> GrowableBloom {
         assert!(0.0 < desired_error_prob && desired_error_prob < 1.0);
+        assert!(growth_factor > 1);
         GrowableBloom {
             blooms: vec![],
             desired_error_prob,
             est_insertions,
             inserts: 0,
             capacity: 0,
+            growth_factor,
+            tightening_ratio,
         }
     }
 
@@ -445,15 +497,131 @@ impl GrowableBloom {
         // fpUB ~= fp0 * fp0*r * fp0*r*r * fp0*r*r*r ...
         // fp(x) = fp0 * (r**x)
         let error_ratio =
-            self.desired_error_prob * Self::TIGHTENING_RATIO.powi(self.blooms.len() as _);
+            self.desired_error_prob * self.tightening_ratio.powi(self.blooms.len() as _);
         // In order to have relatively small space overhead compared to a single appropriately sized bloom filter
         // the sub filters should be created with increasingly bigger sizes.
         // let s = GROWTH_FACTOR
         // cap(x) = cap0 * (s**x)
-        let capacity = self.est_insertions * Self::GROWTH_FACTOR.pow(self.blooms.len() as _);
+        let capacity = self.est_insertions * self.growth_factor.pow(self.blooms.len() as _);
         let new_bloom = Bloom::new(capacity, error_ratio);
         self.blooms.push(new_bloom);
         self.capacity += capacity;
+    }
+}
+
+/// Builder API for GrowableBloom.
+///
+/// ```rust
+/// use growable_bloom_filter::GrowableBloomBuilder;
+/// let mut gbloom = GrowableBloomBuilder::new()
+///     .estimated_insertions(100)
+///     .desired_error_ratio(0.05)
+///     .build();
+/// ```
+pub struct GrowableBloomBuilder {
+    desired_error_ratio: f64,
+    est_insertions: usize,
+    growth_factor: usize,
+    tightening_ratio: f64,
+}
+
+impl GrowableBloomBuilder {
+    /// Create a new GrowableBloomBuilder.
+    ///
+    /// Builder API for GrowableBloom.
+    ///
+    /// ```rust
+    /// use growable_bloom_filter::GrowableBloomBuilder;
+    /// let mut gbloom = GrowableBloomBuilder::new()
+    ///     .estimated_insertions(1000)
+    ///     .desired_error_ratio(0.01)
+    ///     .growth_factor(2)
+    ///     .tightening_ratio(0.85)
+    ///     .build();
+    /// gbloom.insert("hello world");
+    /// assert!(gbloom.contains(&"hello world"));
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            est_insertions: 1000,
+            desired_error_ratio: 0.01,
+            growth_factor: DEFAULT_GROWTH_FACTOR,
+            tightening_ratio: DEFAULT_TIGHTENING_RATIO,
+        }
+    }
+
+    /// Estimated number of insertions. A power of ten accuracy is good enough.
+    ///
+    /// # Panics
+    ///
+    /// This will panic in debug mode if count is zero.
+    pub fn estimated_insertions(self, count: usize) -> Self {
+        Self {
+            est_insertions: count,
+            ..self
+        }
+    }
+
+    /// Desired error ratio (i.e. false positive rate).
+    ///
+    /// Smaller error ratios will use more memory and might be a bit slower.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the error ratio is outside of (0, 1.0).
+    pub fn desired_error_ratio(self, ratio: f64) -> Self {
+        Self {
+            desired_error_ratio: ratio,
+            ..self
+        }
+    }
+
+    /// Base for the exponential growth factor.
+    ///
+    /// As more items are inserted into a GrowableBloom this growth_factor
+    /// number is used to exponentially grow the capacity of newly added
+    /// internal bloom filters. So this number is raised to some exponent proportional
+    /// to the number of bloom filters held internally.
+    ///
+    /// Basically it'll control how quickly the bloom filter grows in capacity.
+    /// By default it's set to two.
+    pub fn growth_factor(self, factor: usize) -> Self {
+        Self {
+            growth_factor: factor,
+            ..self
+        }
+    }
+
+    /// Control the downwards adjustment on the error ratio when growing.
+    ///
+    /// When GrowableBloom adds a new internal bloom filter it uses
+    /// the tightening_ratio to adjust the desired_error_ratio on these
+    /// new, larger internal bloom filters. This is necessary to achieve decent
+    /// accuracy on the user's desired error_ratio while using larger and larger
+    /// bloom filters internally.
+    ///
+    /// By default this library sets it to ~0.85, but for smaller growth factors
+    /// any number around 0.8 - 0.9 should be fine.
+    pub fn tightening_ratio(self, ratio: f64) -> Self {
+        assert!(0.0 < ratio && ratio < 1.0);
+        Self {
+            tightening_ratio: ratio,
+            ..self
+        }
+    }
+
+    /// Consume the builder to create a GrowableBloom.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if an invalid value is specified.
+    pub fn build(self) -> GrowableBloom {
+        GrowableBloom::new_with_internals(
+            self.desired_error_ratio,
+            self.est_insertions,
+            self.growth_factor,
+            self.tightening_ratio,
+        )
     }
 }
 
@@ -512,7 +680,7 @@ mod growable_bloom_tests {
     }
 
     mod test_growable {
-        use crate::GrowableBloom;
+        use crate::{GrowableBloom, DEFAULT_TIGHTENING_RATIO};
         use serde_json;
 
         #[test]
@@ -595,7 +763,7 @@ mod growable_bloom_tests {
         fn verify_saturation() {
             for &fp in &[0.01, 0.001] {
                 // The paper gives an upper bound formula for the fp rate: fpUB <= fp0*/(1-r)
-                let fp_ub = fp / (1.0 - GrowableBloom::TIGHTENING_RATIO);
+                let fp_ub = fp / (1.0 - DEFAULT_TIGHTENING_RATIO);
                 let initial_cap = 100u64;
                 let growth = 1000u64;
                 let mut b = GrowableBloom::new(fp, initial_cap as usize);
@@ -642,6 +810,51 @@ mod growable_bloom_tests {
             let item = 20;
             assert!(!b.check_and_set(&item));
             assert!(b.check_and_set(&item));
+        }
+    }
+
+    mod test_builder {
+        use crate::GrowableBloomBuilder;
+
+        #[test]
+        fn can_build_bloom() {
+            let mut gbloom = GrowableBloomBuilder::new().build();
+            gbloom.insert(3);
+            assert!(gbloom.contains(&3));
+        }
+        #[test]
+        #[should_panic]
+        fn should_panic_on_bad_error_ratio() {
+            GrowableBloomBuilder::new()
+                .estimated_insertions(1000)
+                .desired_error_ratio(99.9)
+                .build();
+        }
+        #[test]
+        #[should_panic]
+        fn should_panic_on_too_small_tightening_ratio() {
+            GrowableBloomBuilder::new().tightening_ratio(0.0).build();
+        }
+        #[test]
+        #[should_panic]
+        fn should_panic_on_too_large_tightening_ratio() {
+            GrowableBloomBuilder::new().tightening_ratio(10.0).build();
+        }
+        #[test]
+        fn can_specify_all_values() {
+            // From https://github.com/dpbriggs/growable-bloom-filters/issues/7
+            let mut gbloom = GrowableBloomBuilder::new()
+                .estimated_insertions(3)
+                .desired_error_ratio(0.00001)
+                .tightening_ratio(0.5)
+                .growth_factor(2)
+                .build();
+            for i in 0..100 {
+                gbloom.insert(i);
+            }
+            for i in 0..100 {
+                assert!(gbloom.contains(&i));
+            }
         }
     }
 

@@ -30,6 +30,15 @@ use serde_json;
 let s = serde_json::to_string(&gbloom).unwrap();
 let des_gbloom: GrowableBloom = serde_json::from_str(&s).unwrap();
 assert!(des_gbloom.contains(&0));
+
+// Builder API
+use growable_bloom_filter::GrowableBloomBuilder;
+let mut gbloom = GrowableBloomBuilder::new()
+    .estimated_insertions(100)
+    .desired_error_ratio(0.05)
+    .build();
+gbloom.insert(&0);
+assert!(gbloom.contains(&0));
 ```
 
 ## Applications

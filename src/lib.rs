@@ -33,7 +33,7 @@ impl Bloom {
     ///
     /// # Arguments
     ///
-    /// * `capacity` - target capacity.
+    /// * `capacity` - target capacity. Panics if `capacity` is zero.
     /// * `error_ratio` - false positive ratio (0..1.0).
     fn new(capacity: usize, error_ratio: f64) -> Bloom {
         // Directly from paper:
@@ -274,10 +274,10 @@ impl GrowableBloom {
     /// # Arguments
     ///
     /// * `desired_error_prob` - The desired error probability (eg. 0.05, 0.01)
-    /// * `est_insertions` - The estimated number of insertions (eg. 100, 1000)
+    /// * `est_insertions` - The estimated number of insertions (eg. 100, 1000).
     ///
     /// Note: You really don't need to be accurate with est_insertions.
-    ///       Power of 10 granularity should be fine.
+    ///       Power of 10 granularity should be fine (~1000 is decent).
     ///
     /// # Example
     ///
@@ -289,7 +289,8 @@ impl GrowableBloom {
     ///
     /// # Panics
     ///
-    /// Panics if desired_error_prob is less then 0 or greater than 1
+    /// * Panics if desired_error_prob is less then 0 or greater than 1.
+    /// * Panics if capacity is zero. If you're unsure, set it to 1000.
     ///
     /// # Builder API
     /// An alternative way to construct a GrowableBloom.
@@ -441,7 +442,7 @@ impl GrowableBloom {
     }
 
     /// The current estimated capacity of the filter.
-    /// A filter starts with a capacity of 0 but will expand to accommodate more items.
+    /// A filter starts with a small capacity and will expand to accommodate more items.
     /// The actual ratio of increase depends on the values used to construct the bloom filter.
     ///
     /// Note: An empty filter has capacity zero as we haven't calculated

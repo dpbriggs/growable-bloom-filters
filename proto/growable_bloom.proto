@@ -1,0 +1,17 @@
+syntax = "proto3";
+package growable_bloom;
+
+message Bloom {
+  bytes buffer = 1;
+  uint64 num_slices = 2;
+}
+
+message GrowableBloom {
+  repeated Bloom blooms = 1;
+  double desired_error_prob = 2;
+  uint64 est_insertions = 3;
+  uint64 inserts = 4;
+  uint64 capacity = 5;
+  uint64 growth_factor = 6;
+  double tightening_ratio = 7;
+}

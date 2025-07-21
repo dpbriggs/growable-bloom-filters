@@ -15,6 +15,98 @@ use std::{
 
 mod stable_hasher;
 
+pub mod pb {
+    include!(concat!(env!("OUT_DIR"), "/growable_bloom.rs"));
+}
+
+use prost::Message;
+use std::convert::{TryFrom, TryInto};
+
+impl From<&Bloom> for pb::Bloom {
+    fn from(b: &Bloom) -> Self {
+        pb::Bloom {
+            buffer: b.buffer.to_vec(),
+            num_slices: b.num_slices.get(),
+        }
+    }
+}
+
+impl TryFrom<&pb::Bloom> for Bloom {
+    type Error = &'static str;
+    fn try_from(pb: &pb::Bloom) -> Result<Self, Self::Error> {
+        Ok(Bloom {
+            buffer: pb.buffer.clone().into_boxed_slice(),
+            num_slices: NonZeroU64::new(pb.num_slices).ok_or("num_slices must be nonzero")?,
+        })
+    }
+}
+
+impl From<&GrowableBloom> for pb::GrowableBloom {
+    fn from(gb: &GrowableBloom) -> Self {
+        pb::GrowableBloom {
+            blooms: gb.blooms.iter().map(|b| b.into()).collect(),
+            desired_error_prob: gb.desired_error_prob,
+            est_insertions: gb.est_insertions as u64,
+            inserts: gb.inserts as u64,
+            capacity: gb.capacity as u64,
+            growth_factor: gb.growth_factor as u64,
+            tightening_ratio: gb.tightening_ratio,
+        }
+    }
+}
+
+impl TryFrom<&pb::GrowableBloom> for GrowableBloom {
+    type Error = &'static str;
+    fn try_from(pb: &pb::GrowableBloom) -> Result<Self, Self::Error> {
+        Ok(GrowableBloom {
+            blooms: pb.blooms.iter().map(|b| b.try_into()).collect::<Result<_,_>>()?,
+            desired_error_prob: pb.desired_error_prob,
+            est_insertions: pb.est_insertions as usize,
+            inserts: pb.inserts as usize,
+            capacity: pb.capacity as usize,
+            growth_factor: pb.growth_factor as usize,
+            tightening_ratio: pb.tightening_ratio,
+        })
+    }
+}
+
+impl TryFrom<pb::GrowableBloom> for GrowableBloom {
+    type Error = &'static str;
+    fn try_from(pb: pb::GrowableBloom) -> Result<Self, Self::Error> {
+        GrowableBloom::try_from(&pb)
+    }
+}
+
+impl GrowableBloom {
+    /// Serialize to protobuf bytes
+    pub fn to_protobuf_bytes(&self) -> Vec<u8> {
+        let pb: pb::GrowableBloom = self.into();
+        let mut buf = Vec::with_capacity(pb.encoded_len());
+        pb.encode(&mut buf).unwrap();
+        buf
+    }
+
+    /// Deserialize from protobuf bytes
+    pub fn from_protobuf_bytes(bytes: &[u8]) -> Result<Self, prost::DecodeError> {
+        let pb = pb::GrowableBloom::decode(bytes)?;
+        pb.try_into().map_err(|_| prost::DecodeError::new("Conversion error"))
+    }
+}
+
+#[cfg(test)]
+mod protobuf_tests {
+    use super::*;
+
+    #[test]
+    fn protobuf_roundtrip() {
+        let mut gbloom = GrowableBloom::new(0.05, 10);
+        gbloom.insert(&42);
+        let bytes = gbloom.to_protobuf_bytes();
+        let decoded = GrowableBloom::from_protobuf_bytes(&bytes).unwrap();
+        assert!(decoded.contains(&42));
+    }
+}
+
 /// Base Bloom Filter
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 struct Bloom {
